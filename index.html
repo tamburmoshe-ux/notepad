@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>My Notepad</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 700px;
+      margin: 30px auto;
+      padding: 0 16px;
+      background: #f4f7ff;
+    }
+    /* Keep the app above the bubbles */
+    h1, #msg, section { position: relative; z-index: 1; }
+
+    input, textarea, button { font: inherit; padding: 8px; margin: 4px 0; }
+    input, textarea { width: 100%; box-sizing: border-box; }
+    textarea { min-height: 100px; }
+    .note {
+      border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 10px 0;
+      background: rgba(255, 255, 255, 0.85);
+    }
+    .row { display: flex; gap: 8px; }
+    .hidden { display: none; }
+    #msg { color: #c00; }
+
+    /* ---------- Floating bubbles ---------- */
+    #bubbles {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      z-index: 0;
+      pointer-events: none; /* clicks go through the bubbles */
+    }
+    .bubble {
+      position: absolute;
+      bottom: -150px;
+      border-radius: 50%;
+      opacity: 0.55;
+      animation-name: floatUp;
+      animation-timing-function: linear;
+      animation-iteration-count: infinite;
+    }
+    @keyframes floatUp {
+      0%   { transform: translateY(0) translateX(0); }
+      50%  { transform: translateY(-60vh) translateX(40px); }
+      100% { transform: translateY(-120vh) translateX(-20px); }
+    }
+  </style>
+</head>
+<body>
+  <div id="bubbles"></div>
+
+  <h1>📝 My Notepad</h1>
+  <p id="msg"></p>
+
+  <section id="auth">
+    <input id="email" type="email" placeholder="Email" />
+    <input id="password" type="password" placeholder="Password (min 6 chars)" />
+    <div class="row">
+      <button id="btnLogin">Log in</button>
+      <button id="btnSignup">Sign up</button>
+    </div>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="row">
+      <span id="userEmail"></span>
+      <button id="btnLogout">Log out</button>
+    </div>
+
+    <h3 id="formTitle">New note</h3>
+    <input id="title" placeholder="Title" />
+    <textarea id="content" placeholder="Write something... (Enter = save, Shift+Enter = new line)"></textarea>
+    <div class="row">
+      <button id="btnSave">Save</button>
+      <button id="btnCancel" class="hidden">Cancel edit</button>
+    </div>
+
+    <h3>Your notes</h3>
+    <div id="notes"></div>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const { createClient } = supabase;
+
+    // 👇 REPLACE THE KEY BELOW
+    const SUPABASE_URL = "https://jowqkemnwwalvddmrghk.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_p8f8FqKixsh5QTOQP7CEIg_7lAWzlT4";
+
+    const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+    const $ = (id) => document.getElementById(id);
+    let editingId = null;
+
+    const showMsg = (t = "") => ($("msg").textContent = t);
+
+    // ---------- Bubbles ----------
+    const BUBBLE_COUNT = 25; // change this for more or fewer bubbles
+    const colors = ["#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#5f27cd", "#ff9ff3", "#54a0ff"];
+    const bubbleBox = $("bubbles");
+
+    for (let i = 0; i < BUBBLE_COUNT; i++) {
+      const b = document.createElement("div");
+      b.className = "bubble";
+      const size = 20 + Math.random() * 70;                 // 20-90 px
+      b.style.width = b.style.height = size + "px";
+      b.style.left = Math.random() * 100 + "%";
+      b.style.background = colors[Math.floor(Math.random() * colors.length)];
+      b.style.animationDuration = 8 + Math.random() * 14 + "s"; // 8-22 seconds
+      b.style.animationDelay = -Math.random() * 20 + "s";       // start at different points
+      bubbleBox.append(b);
+    }
+
+    // ---------- Auth ----------
+    $("btnSignup").onclick = async () => {
+      const { error } = await sb.auth.signUp({
+        email: $("email").value,
+        password: $("password").value,
+      });
+      showMsg(error ? error.message : "Signed up! If email confirmation is on, check your inbox.");
+    };
+
+    $("btnLogin").onclick = async () => {
+      const { error } = await sb.auth.signInWithPassword({
+        email: $("email").value,
+        password: $("password").value,
+      });
+      showMsg(error ? error.message : "");
+    };
+
+    $("btnLogout").onclick = () => sb.auth.signOut();
+
+    sb.auth.onAuthStateChange((_event, session) => {
+      const loggedIn = !!session;
+      $("auth").classList.toggle("hidden", loggedIn);
+      $("app").classList.toggle("hidden", !loggedIn);
+      if (loggedIn) {
+        $("userEmail").textContent = session.user.email;
+        loadNotes();
+      }
+    });
+
+    // ---------- CRUD ----------
+    async function loadNotes() {
+      const { data, error } = await sb
+        .from("notes")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) return showMsg(error.message);
+
+      const box = $("notes");
+      box.replaceChildren();
+      data.forEach((n) => {
+        const div = document.createElement("div");
+        div.className = "note";
+
+        const h = document.createElement("strong");
+        h.textContent = n.title || "(no title)";
+        const p = document.createElement("p");
+        p.style.whiteSpace = "pre-wrap";
+        p.textContent = n.content;
+
+        const edit = document.createElement("button");
+        edit.textContent = "Edit";
+        edit.onclick = () => startEdit(n);
+
+        const del = document.createElement("button");
+        del.textContent = "Delete";
+        del.onclick = () => deleteNote(n.id);
+
+        div.append(h, p, edit, del);
+        box.append(div);
+      });
+    }
+
+    $("btnSave").onclick = async () => {
+      const note = { title: $("title").value, content: $("content").value };
+      const { error } = editingId
+        ? await sb.from("notes").update(note).eq("id", editingId)
+        : await sb.from("notes").insert(note);
+      if (error) return showMsg(error.message);
+      showMsg("");
+      resetForm();
+      loadNotes();
+    };
+
+    async function deleteNote(id) {
+      if (!confirm("Delete this note?")) return;
+      const { error } = await sb.from("notes").delete().eq("id", id);
+      if (error) return showMsg(error.message);
+      loadNotes();
+    }
+
+    function startEdit(n) {
+      editingId = n.id;
+      $("title").value = n.title;
+      $("content").value = n.content;
+      $("formTitle").textContent = "Edit note";
+      $("btnCancel").classList.remove("hidden");
+    }
+
+    function resetForm() {
+      editingId = null;
+      $("title").value = "";
+      $("content").value = "";
+      $("formTitle").textContent = "New note";
+      $("btnCancel").classList.add("hidden");
+    }
+    $("btnCancel").onclick = resetForm;
+
+    // ---------- Keyboard ----------
+    $("content").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        $("btnSave").click();
+      }
+    });
+
+    $("password").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $("btnLogin").click();
+    });
+  </script>
+</body>
+</html>
